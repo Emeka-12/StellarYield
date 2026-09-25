@@ -56,6 +56,7 @@ import contactsRouter from "./routes/contacts";
 import rebalancesRouter from "./routes/rebalances";
 import sharePriceHistoryRouter from "./routes/sharePriceHistory";
 import withdrawalPreviewRouter from "./routes/withdrawalPreview";
+import vaultRedemptionPreviewRouter from "./routes/vaultRedemptionPreview";
 import allocationRollbackPreviewRouter from "./routes/allocationRollbackPreview";
 import reliabilityRouter from "./routes/reliability";
 import relayerStatusRouter from "./routes/relayerStatus";
@@ -187,6 +188,7 @@ export function createApp() {
   app.use("/api/vaults/migration-readiness", migrationReadinessRouter);
   app.use("/api/vaults", sharePriceHistoryRouter);
   app.use("/api/vaults", withdrawalPreviewRouter);
+  app.use("/api/vaults", vaultRedemptionPreviewRouter);
   app.use("/api/vaults", allocationRollbackPreviewRouter);
   app.use("/api/reliability", reliabilityRouter);
   app.use("/api/relayer", relayerStatusRouter);
