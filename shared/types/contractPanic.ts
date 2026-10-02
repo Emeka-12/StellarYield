@@ -252,6 +252,13 @@ const ZAP_ERRORS: Record<number, ContractErrorEntry> = {
     remediation: "Check pool liquidity for this pair and try again with a fresh quote.",
     retryable: true,
   },
+  4001: {
+    name: "QuoteExpired",
+    title: "Quote Expired",
+    message: "The swap quote expired before your transaction reached the network, so nothing was swapped or deposited.",
+    remediation: "Refresh the quote and submit again.",
+    retryable: true,
+  },
 };
 
 const CONTRACT_ERRORS: Record<ContractErrorNamespace, Record<number, ContractErrorEntry>> = {

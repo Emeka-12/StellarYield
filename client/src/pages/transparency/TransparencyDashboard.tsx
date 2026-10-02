@@ -27,6 +27,7 @@ import {
 import { getApiBaseUrl } from "../../lib/api";
 import { parseSmokeRunResult } from "./smokeResults";
 import VaultReliabilityPanel from "./VaultReliabilityPanel";
+import VaultSharePriceReconcilePanel from "../../features/vault_share_price/VaultSharePriceReconcilePanel";
 import AuditReplayReportPanel from "./AuditReplayReportPanel";
 import RegistryDiffPage from "./RegistryDiff";
 import DeploymentManifestVerifier from "../../components/DeploymentManifestVerifier";
@@ -517,6 +518,7 @@ export default function TransparencyDashboard() {
 
             {/* Data Source Reliability */}
             <VaultReliabilityPanel />
+            <VaultSharePriceReconcilePanel />
             <AuditReplayReportPanel />
             <DeploymentManifestVerifier />
             <RegistryDiffPage />

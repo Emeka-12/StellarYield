@@ -43,7 +43,7 @@ tags:
       |---|---|---|
       | `MISSING_FIELDS` | 400 | Required request fields are missing. |
       | `INVALID_AMOUNT` | 400 | `amountInStroops` is not a valid integer string. |
-      | `STALE_QUOTE` | 400 / 422 | The provided quote has expired (older than 60s) and must be refreshed. |
+      | `STALE_QUOTE` | 400 / 422 | The provided quote is past its `expiresAt` (TTL configured via `ZAP_QUOTE_TTL_MS`, default 60s) and must be refreshed. Responses carry `recoverable: true`. |
       | `UNSUPPORTED_ASSET` | 400 / 422 | One or more assets in the quote path are no longer in the supported asset set. |
       | `SLIPPAGE_EXCEEDED` | 400 / 422 | The applied slippage exceeds the maximum allowed threshold (15%). |
       | `ROUTE_MISMATCH` | 400 | The route hash in the quote does not match the current computed path. |
@@ -870,6 +870,7 @@ paths:
                   value:
                     error: "STALE_QUOTE"
                     message: "Quote has expired"
+                    recoverable: true
                 unsupportedAsset:
                   summary: UNSUPPORTED_ASSET
                   value:
@@ -2956,6 +2957,124 @@ paths:
 
   # ── Incidents ─────────────────────────────────────────────────────────────
 
+  /api/portfolio/exposure/heatmap:
+    post:
+      summary: Build an asset × protocol exposure heatmap
+      description: >
+        Cross-tabulates positions into a matrix of portfolio share per
+        (asset, protocol) pair. Row and column totals equal the per-asset and
+        per-protocol exposure buckets. Cells are graded against the stricter of
+        the configured asset and protocol concentration thresholds
+        (`CONCENTRATION_*_SHARE`). Beyond `maxAssets` / `maxProtocols`, the
+        smallest entries collapse into an "Other" bucket (key `__other__`).
+        Zero-value positions are skipped; an empty portfolio returns empty arrays.
+      tags:
+        - Portfolio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [positions]
+              properties:
+                positions:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required: [asset, protocol]
+                    properties:
+                      asset:
+                        type: string
+                      protocol:
+                        type: string
+                      valueUsd:
+                        type: number
+                        minimum: 0
+                      currentValueUsd:
+                        type: number
+                        minimum: 0
+                        description: Accepted in place of `valueUsd`.
+                maxAssets:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+                  default: 8
+                maxProtocols:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+                  default: 8
+      responses:
+        '200':
+          description: Heatmap matrix
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ExposureHeatmapAxisEntry'
+                  protocols:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ExposureHeatmapAxisEntry'
+                  cells:
+                    type: array
+                    description: "`cells[row][col]` aligned with `assets[row]` × `protocols[col]`."
+                    items:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          valueUsd:
+                            type: number
+                          share:
+                            type: number
+                          severity:
+                            type: string
+                            enum: [ok, warning, critical]
+                  totalValueUsd:
+                    type: number
+                  maxCellShare:
+                    type: number
+                  severity:
+                    type: string
+                    enum: [ok, warning, critical]
+                  cellThreshold:
+                    type: object
+                    properties:
+                      warn:
+                        type: number
+                      critical:
+                        type: number
+                  positionCount:
+                    type: integer
+                  skippedCount:
+                    type: integer
+        '400':
+          description: >
+            `MALFORMED_INPUT` (positions not an array), `INVALID_POSITION`
+            (`details.index` names the offending position), `TOO_MANY_POSITIONS`,
+            or `INVALID_OPTIONS`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    enum: [MALFORMED_INPUT, INVALID_POSITION, TOO_MANY_POSITIONS, INVALID_OPTIONS]
+                  message:
+                    type: string
+                  details:
+                    type: object
+                    properties:
+                      index:
+                        type: integer
   /api/portfolio/reconcile:
     post:
       summary: Reconcile a portfolio and explain any failures
@@ -3747,6 +3866,98 @@ paths:
                   value:
                     error: Transaction not found.
 
+  /api/onramp/intent:
+    post:
+      summary: Confirm an onramp quote and create a pending deposit
+      description: >
+        Creates a PENDING onramp transaction for a quote. Send an
+        `Idempotency-Key` so a retried request returns the original
+        transaction instead of creating a duplicate.
+      tags:
+        - Onramp
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quoteId, walletAddress]
+              properties:
+                quoteId:
+                  type: string
+                walletAddress:
+                  type: string
+      responses:
+        '200':
+          description: Pending transaction created (or replayed)
+          headers:
+            Idempotent-Replayed:
+              description: "`true` when this is a stored response replayed for a repeated key."
+              schema:
+                type: string
+                enum: ["true"]
+        '400':
+          description: >
+            `INVALID_IDEMPOTENCY_KEY` (malformed header) or, when
+            `IDEMPOTENCY_REQUIRED=true`, `IDEMPOTENCY_KEY_REQUIRED`.
+        '409':
+          description: >
+            `IDEMPOTENCY_REQUEST_IN_PROGRESS` — a request with this key is still
+            running. `recoverable: true`; retry after `Retry-After` seconds.
+        '422':
+          description: "`IDEMPOTENCY_KEY_REUSED` — the key was already used with a different body."
+        '503':
+          description: >
+            `IDEMPOTENCY_STORE_UNAVAILABLE` — the key could not be checked, so the
+            request was not run. `recoverable: true`; retry with the same key.
+
+  /api/offramp/withdrawals:
+    post:
+      summary: Create an offramp withdrawal (proxied to the provider)
+      description: >
+        Proxies withdrawal creation to the offramp provider and returns its
+        status and body. Send an `Idempotency-Key` so a retried request cannot
+        create a second withdrawal. Provider 5xx and proxy failures are not
+        stored, so the same key can be retried.
+      tags:
+        - Offramp
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Passed through to the provider unchanged.
+      responses:
+        '201':
+          description: Withdrawal created by the provider (or replayed)
+          headers:
+            Idempotent-Replayed:
+              description: "`true` when this is a stored response replayed for a repeated key."
+              schema:
+                type: string
+                enum: ["true"]
+        '502':
+          description: "`OFFRAMP_PROXY_ERROR` — provider unreachable. Not stored; retry with the same key."
+        '400':
+          description: >
+            `INVALID_IDEMPOTENCY_KEY` (malformed header) or, when
+            `IDEMPOTENCY_REQUIRED=true`, `IDEMPOTENCY_KEY_REQUIRED`.
+        '409':
+          description: >
+            `IDEMPOTENCY_REQUEST_IN_PROGRESS` — a request with this key is still
+            running. `recoverable: true`; retry after `Retry-After` seconds.
+        '422':
+          description: "`IDEMPOTENCY_KEY_REUSED` — the key was already used with a different body."
+        '503':
+          description: >
+            `OFFRAMP_UNAVAILABLE` (not configured) or `IDEMPOTENCY_STORE_UNAVAILABLE` — the key could not be checked, so the
+            request was not run. `recoverable: true`; retry with the same key.
+
   /api/onramp/webhook:
     post:
       summary: Onramp provider webhook
@@ -4171,7 +4382,41 @@ paths:
   # - Any admin-only endpoints that require interactive session tokens are documented above when needed; ephemeral or highly-sensitive debug routes are excluded.
 
 components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >
+        Client-generated key (UUID recommended; 1–255 of `A-Za-z0-9._:-`). A
+        repeat with the same key and body replays the stored response instead
+        of running the request again. Keys expire after `IDEMPOTENCY_TTL_MS`
+        (default 24h). Required only when `IDEMPOTENCY_REQUIRED=true`.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._:-]{1,255}$'
   schemas:
+    ExposureHeatmapAxisEntry:
+      type: object
+      properties:
+        key:
+          type: string
+          description: The label, or `__other__` for the collapsed bucket.
+        label:
+          type: string
+        valueUsd:
+          type: number
+        share:
+          type: number
+        severity:
+          type: string
+          enum: [ok, warning, critical]
+        members:
+          type: array
+          items:
+            type: string
+          description: Labels folded into this entry (several only for "Other").
+
     ValuationFreshness:
       type: object
       description: Freshness annotation for a valuation snapshot (#1362)
@@ -4894,7 +5139,7 @@ components:
         expiresAt:
           type: string
           format: date-time
-          description: ISO-8601 timestamp when the quote expires (quotedAt + 60s)
+          description: ISO-8601 timestamp when the quote expires (quotedAt + ZAP_QUOTE_TTL_MS, default 60s)
           example: "2026-07-26T12:01:00.000Z"
         routeHash:
           type: string
@@ -4961,9 +5206,17 @@ components:
         details:
           type: object
           description: Optional structured error details
+        recoverable:
+          type: boolean
+          description: >
+            When true, the client can recover by requesting a fresh quote or
+            retrying (e.g. STALE_QUOTE, CONFIG_DRIFT, ROUTE_MISMATCH,
+            UNSUPPORTED_ASSET, transient QUOTE_FAILED). Absent or false for
+            validation failures that require changing inputs.
       example:
         error: "STALE_QUOTE"
         message: "Quote has expired"
+        recoverable: true
 
     ZapSupportedAssetsResponse:
       type: object

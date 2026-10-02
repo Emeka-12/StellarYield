@@ -18,6 +18,7 @@ import { freezeService } from "../services/freezeService";
 import {
   vaultRegistryService,
   VaultRegistryValidationError,
+  type VaultStatus,
 } from "../services/vaultRegistryService";
 import {
   parsePaginationLimit,
@@ -25,8 +26,13 @@ import {
 } from "../types/pagination";
 import { PROTOCOLS } from "../config/protocols";
 import { strategyStateTransitionAuditService } from "../services/strategyStateTransitionAuditService";
-import { rebalanceSagaService, SAGA_STATE } from "../services/rebalanceSagaService";
+import {
+  rebalanceSagaService,
+  SAGA_STATE,
+} from "../services/rebalanceSagaService";
 import { recoverStuckSagas } from "../services/rebalanceSagaExecutor";
+import { promoteYieldSource } from "../services/yieldSourceRegistryService";
+import { YieldSourceOnboardingError } from "../services/yieldSourceOnboardingService";
 
 const adminRouter = Router();
 
@@ -35,7 +41,8 @@ const adminRouter = Router();
  */
 function requireAdmin(req: Request, res: Response, next: () => void): void {
   const user = (req as unknown as Record<string, unknown>).user as
-    { role?: string } | undefined;
+    | { role?: string }
+    | undefined;
 
   if (!user || user.role !== "ADMIN") {
     res.status(403).json({ error: "Unauthorized: Admin access required" });
@@ -92,8 +99,29 @@ adminRouter.post(
 adminRouter.get(
   "/vaults/registry",
   requireAdmin,
-  (_req: Request, res: Response): void => {
-    res.json({ vaults: vaultRegistryService.listVaults() });
+  (req: Request, res: Response): void => {
+    const requestedStatus = req.query.status;
+    if (requestedStatus === undefined) {
+      res.json({ vaults: vaultRegistryService.listVaults() });
+      return;
+    }
+
+    if (typeof requestedStatus !== "string") {
+      res.status(400).json({
+        error: "status must be one of: ACTIVE, PAUSED, DEPRECATED",
+      });
+      return;
+    }
+
+    const status = requestedStatus.toUpperCase() as VaultStatus;
+    if (!["ACTIVE", "PAUSED", "DEPRECATED"].includes(status)) {
+      res.status(400).json({
+        error: "status must be one of: ACTIVE, PAUSED, DEPRECATED",
+      });
+      return;
+    }
+
+    res.json({ vaults: vaultRegistryService.listVaults(status) });
   },
 );
 
@@ -743,7 +771,8 @@ adminRouter.post(
       }
 
       const user = (req as unknown as Record<string, unknown>).user as
-        { id?: string; email?: string } | undefined;
+        | { id?: string; email?: string }
+        | undefined;
 
       const entry = await recordAdminConfirmation({
         actorId: user?.id ?? "ANONYMOUS",
@@ -789,7 +818,9 @@ adminRouter.get(
 
       const result = await rebalanceSagaService.listSagas({
         vaultId: vaultId as string | undefined,
-        state: state as (typeof SAGA_STATE)[keyof typeof SAGA_STATE] | undefined,
+        state: state as
+          | (typeof SAGA_STATE)[keyof typeof SAGA_STATE]
+          | undefined,
         limit: limit ? parseInt(limit as string) : 50,
         offset: offset ? parseInt(offset as string) : 0,
       });
@@ -834,9 +865,7 @@ adminRouter.get(
     } catch (error) {
       res.status(500).json({
         error:
-          error instanceof Error
-            ? error.message
-            : "Failed to get saga details",
+          error instanceof Error ? error.message : "Failed to get saga details",
       });
     }
   },
@@ -909,7 +938,8 @@ adminRouter.post(
       }
 
       const user = (req as unknown as Record<string, unknown>).user as
-        { id?: string; email?: string } | undefined;
+        | { id?: string; email?: string }
+        | undefined;
 
       const entry = await recordCancelledAction({
         actorId: user?.id ?? "ANONYMOUS",
@@ -961,7 +991,8 @@ adminRouter.post(
         return;
       }
 
-      const actor = (req as unknown as { user?: { id: string } }).user?.id || "admin";
+      const actor =
+        (req as unknown as { user?: { id: string } }).user?.id || "admin";
       const saga = await rebalanceSagaService.resolveManualReview(
         sagaId,
         decision,
@@ -1017,6 +1048,50 @@ adminRouter.post(
           error instanceof Error
             ? error.message
             : "Failed to recover stuck sagas",
+      });
+    }
+  },
+);
+
+/**
+ * Promote a yield source after it passes the onboarding checklist (#1156).
+ * Incomplete entries are rejected with every missing field named, so they can
+ * never become visible on production routes.
+ * POST /api/admin/yield-sources/promote
+ */
+adminRouter.post(
+  "/yield-sources/promote",
+  requireAdmin,
+  (req: Request, res: Response): void => {
+    try {
+      const body = req.body ?? {};
+      const id = typeof body.id === "string" ? body.id : undefined;
+
+      setAuditContext(req, {
+        action: "PROMOTE_YIELD_SOURCE",
+        resource: "YIELD_SOURCE_REGISTRY",
+        resourceId: id,
+        changes: { id: body.id, name: body.name, source: body.source },
+      });
+
+      const promoted = promoteYieldSource(body);
+
+      res.json({ success: true, source: promoted });
+    } catch (error) {
+      if (error instanceof YieldSourceOnboardingError) {
+        res.status(error.statusCode).json({
+          error: error.message,
+          code: error.code,
+          missingFields: error.details.missingFields,
+          issues: error.details.issues,
+        });
+        return;
+      }
+      res.status(500).json({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to promote yield source",
       });
     }
   },

@@ -11,7 +11,9 @@ import {
 import { YieldFlowCanvas } from "../visualizations";
 import PortfolioVisualizer from "../visualizer/PortfolioVisualizer";
 import { ExposureMap } from "../../portfolio/ExposureMap";
+import ExposureHeatmap from "./ExposureHeatmap";
 import { DailyMovementPanel } from "../../portfolio/DailyMovementPanel";
+import { useDailyMovement } from "../../hooks/useDailyMovement";
 import PresetsPanel from "../../features/presets/PresetsPanel";
 import UnifiedActivityTimeline from "./UnifiedActivityTimeline";
 import PortfolioExport from "./PortfolioExport";
@@ -19,7 +21,6 @@ import PortfolioImport from "./PortfolioImport";
 import RiskScoreBreakdownPanel from "./RiskScoreBreakdownPanel";
 import FreshnessBadge from "./FreshnessBadge";
 import { computeHoldingFreshness } from "./holdingFreshness";
-import { useDailyMovement } from "../../hooks/useDailyMovement";
 import {
   analyzeConcentration,
   buildExposureBuckets,
@@ -181,6 +182,15 @@ export default function PortfolioDashboard({
   const concentration = useMemo(
     () => analyzeConcentration(exposure),
     [exposure],
+  );
+  const heatmapPositions = useMemo(
+    () =>
+      positions.map((p) => ({
+        asset: p.asset,
+        protocol: p.protocol,
+        valueUsd: p.currentValue,
+      })),
+    [positions],
   );
 
   // Issue #1151: positions/transactions loading is scoped to the sections
@@ -351,6 +361,8 @@ export default function PortfolioDashboard({
               totalValue: exposure.totalValueUsd,
             }}
           />
+
+          <ExposureHeatmap positions={heatmapPositions} />
 
           {/* 3D Visualizer Integration */}
           <PortfolioVisualizer />

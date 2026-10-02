@@ -75,6 +75,7 @@ import OnRampModal from "./features/onramp/OnRampModal";
 import { useWallet } from "./context/useWallet";
 import { NotificationProvider } from "./context/NotificationContext";
 import RouteBoundary from "./components/common/RouteBoundary";
+import { TransactionErrorBoundary } from "./components/transaction/TransactionErrorBoundary";
 import RequireOnboarding from "./components/common/RequireOnboarding";
 import {
   Landmark,
@@ -347,17 +348,21 @@ const router = createBrowserRouter([
       {
         path: "/vault",
         element: (
-          <RequireOnboarding require="network">
-            <Vault />
-          </RequireOnboarding>
+          <TransactionErrorBoundary workflowName="vault">
+            <RequireOnboarding require="network">
+              <Vault />
+            </RequireOnboarding>
+          </TransactionErrorBoundary>
         ),
       },
       {
         path: "/vault/:slug",
         element: (
-          <RequireOnboarding require="network">
-            <Vault />
-          </RequireOnboarding>
+          <TransactionErrorBoundary workflowName="vault">
+            <RequireOnboarding require="network">
+              <Vault />
+            </RequireOnboarding>
+          </TransactionErrorBoundary>
         ),
       },
       {
